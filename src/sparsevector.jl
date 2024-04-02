@@ -1589,9 +1589,9 @@ function Base._mapreduce(f, op, ::IndexCartesian, A::SparseVectorUnion)
     _mapreducezeros(f, op, T, rest, ini)
 end
 
-Base._any(f, A::SparseVectorUnion, ::Colon) =
+Base._any(f::Base.Callable, A::SparseVectorUnion, ::Colon) =
     iszero(length(A)) ? false : Base._mapreduce(f, |, IndexCartesian(), A)
-Base._all(f, A::SparseVectorUnion, ::Colon) =
+Base._all(f::Base.Callable, A::SparseVectorUnion, ::Colon) =
     iszero(length(A)) ? true  : Base._mapreduce(f, &, IndexCartesian(), A)
 
 function Base.mapreducedim!(f, op, R::AbstractVector, A::SparseVectorUnion)
