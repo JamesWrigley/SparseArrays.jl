@@ -510,7 +510,7 @@ function LinearAlgebra.ldiv!(X::StridedVecOrMat{T}, F::QRSparse{T}, B::StridedVe
     # Apply right permutation: scatter solved rows into X using cpiv directly.
     # Zero X first so free variables (beyond rank) are zero in the basic solution.
     # NB: cpiv == [] if SPQR was called with ORDERING_FIXED
-    fill!(X, zero(eltype(X)))
+    fill!(X, zero(T))
     if length(F.cpiv) == 0
         for j in axes(W, 2)
             for i in 1:rnk
