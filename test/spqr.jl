@@ -150,7 +150,7 @@ end
     A = sparse([0.0 1 0 0; 0 0 0 0])
     F = qr(A)
     @test propertynames(F) == (:R, :Q, :prow, :pcol)
-    @test propertynames(F, true) == (:R, :Q, :prow, :pcol, :factors, :τ, :cpiv, :rpivinv, :_ldiv_workspace)
+    @test propertynames(F, true) == (:R, :Q, :prow, :pcol, :factors, :τ, :cpiv, :rpivinv, :_lock, :_ldiv_workspace)
 end
 
 @testset "rank" begin
@@ -205,6 +205,16 @@ end
         @test_throws DimensionMismatch ldiv!(zeros(n), F, zeros(m - 1))
         @test_throws DimensionMismatch ldiv!(zeros(n - 1), F, zeros(m))
         @test_throws DimensionMismatch ldiv!(zeros(n, 2), F, zeros(m, 3))
+    end
+
+    @testset "copying QRSparse" begin
+        A = sprandn(m, n, 0.5)
+        F = qr(A)
+        F_copy = copy(F)
+
+        # These fields must not be shared
+        @test F._lock !== F_copy._lock
+        @test F._ldiv_workspace !== F_copy._ldiv_workspace
     end
 end
 

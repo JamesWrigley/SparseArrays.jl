@@ -118,6 +118,7 @@ struct QRSparse{Tv,Ti} <: LinearAlgebra.Factorization{Tv}
     cpiv::Vector{Ti}
     rpivinv::Vector{Ti}
 
+    _lock::ReentrantLock
     _ldiv_workspace::Vector{Tv}   # backing storage for work buffer (resizable)
 end
 
@@ -157,11 +158,11 @@ Compute the `QR` factorization of a sparse matrix `A`. Fill-reducing row and col
 are used such that `F.R = F.Q'*A[F.prow,F.pcol]`. The main application of this type is to
 solve least squares or underdetermined problems with [`\\`](@ref). The function calls the C library SPQR[^ACM933].
 
-!!! warning
+!!! note
     The returned `QRSparse` object uses an internal workspace for
-    [`ldiv!()`](@ref) calls. It is not safe to call [`ldiv!()`](@ref) on the
-    same `QRSparse` object from multiple threads concurrently. For multithreaded
-    use, create a separate copy for each thread with `copy(F)`.
+    [`ldiv!()`](@ref) calls that is protected by a lock for threadsafety. For
+    multithreaded use, create a separate copy of this object for each task with
+    `copy(F)`.
 
 !!! note
     `qr(A::SparseMatrixCSC)` uses the SPQR library that is part of [SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse).
@@ -221,6 +222,7 @@ function LinearAlgebra.qr(A::SparseMatrixCSC{Tv, Ti}; tol=_default_tol(A), order
                                     rowvals(R_),
                                     nonzeros(R_)),
                     p, hpinv,
+                    ReentrantLock(),
                     Tv[])              # _ldiv_workspace (lazily sized on first solve)
 end
 LinearAlgebra.qr(A::SparseMatrixCSC{Float16}; tol=_default_tol(A)) =
@@ -372,7 +374,7 @@ each copy can be used independently in a different thread.
 """
 function Base.copy(F::QRSparse)
     QRSparse(F.factors, F.τ, F.R, F.cpiv, F.rpivinv,
-             similar(F._ldiv_workspace))
+             ReentrantLock(), similar(F._ldiv_workspace))
 end
 
 function Base.show(io::IO, mime::MIME{Symbol("text/plain")}, F::QRSparse)
@@ -488,42 +490,45 @@ function LinearAlgebra.ldiv!(X::StridedVecOrMat{T}, F::QRSparse{T}, B::StridedVe
     m = size(F, 1)
     n = size(F, 2)
 
-    W = _get_ldiv_workspace(F, B)
+    @lock F._lock begin
+        W = _get_ldiv_workspace(F, B)
 
-    # Apply left permutation to B and store in W
-    for j in axes(B, 2)
-        for i in 1:length(F.rpivinv)
-            @inbounds W[F.rpivinv[i], j] = B[i, j]
+        # Apply left permutation to B and store in W
+        for j in axes(B, 2)
+            for i in 1:length(F.rpivinv)
+                @inbounds W[F.rpivinv[i], j] = B[i, j]
+            end
+        end
+
+        # Make a view into W corresponding to the size of B
+        W0 = @view W[Base.OneTo(m), :]
+
+        # Apply Q' to permuted B
+        lmul!(adjoint(F.Q), W0)
+
+        # Solve R*X = Q'*P*B
+        ldiv!(UpperTriangular(@view(F.R[Base.OneTo(rnk), Base.OneTo(rnk)])),
+              @view(W0[Base.OneTo(rnk), :]))
+
+        # Apply right permutation: scatter solved rows into X using cpiv directly.
+        # Zero X first so free variables (beyond rank) are zero in the basic solution.
+        # NB: cpiv == [] if SPQR was called with ORDERING_FIXED
+        fill!(X, zero(T))
+        if length(F.cpiv) == 0
+            for j in axes(W, 2)
+                for i in 1:rnk
+                    @inbounds X[i, j] = W[i, j]
+                end
+            end
+        else
+            for j in axes(W, 2)
+                for i in 1:rnk
+                    @inbounds X[F.cpiv[i], j] = W[i, j]
+                end
+            end
         end
     end
 
-    # Make a view into W corresponding to the size of B
-    W0 = @view W[Base.OneTo(m), :]
-
-    # Apply Q' to permuted B
-    lmul!(adjoint(F.Q), W0)
-
-    # Solve R*X = Q'*P*B
-    ldiv!(UpperTriangular(@view(F.R[Base.OneTo(rnk), Base.OneTo(rnk)])),
-          @view(W0[Base.OneTo(rnk), :]))
-
-    # Apply right permutation: scatter solved rows into X using cpiv directly.
-    # Zero X first so free variables (beyond rank) are zero in the basic solution.
-    # NB: cpiv == [] if SPQR was called with ORDERING_FIXED
-    fill!(X, zero(T))
-    if length(F.cpiv) == 0
-        for j in axes(W, 2)
-            for i in 1:rnk
-                @inbounds X[i, j] = W[i, j]
-            end
-        end
-    else
-        for j in axes(W, 2)
-            for i in 1:rnk
-                @inbounds X[F.cpiv[i], j] = W[i, j]
-            end
-        end
-    end
     return X
 end
 
