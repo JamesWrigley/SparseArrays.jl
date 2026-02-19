@@ -442,8 +442,9 @@ function _get_ldiv_workspace(F::QRSparse{Tv}, B::StridedVecOrMat) where Tv
         resize!(F._ldiv_workspace, wlen)
     end
 
-    # Reshape into matrix
-    W = reshape(F._ldiv_workspace, (wrows, k))
+    # Reshape into matrix. Note that we use ReshapedArray here instead of
+    # reshape() to avoid allocations later when taking a view.
+    W = Base.ReshapedArray(F._ldiv_workspace, (wrows, k), ())
     return W
 end
 
